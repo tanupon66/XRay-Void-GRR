@@ -7,6 +7,7 @@ function showView(name){
   const isOpt=name==='optimizer';
   analysis.classList.toggle('hidden',isOpt);optimizer.classList.toggle('hidden',!isOpt);
   document.querySelectorAll('.nav-tab').forEach(b=>b.classList.toggle('active',b.dataset.view===name));
+  if(isOpt)setTimeout(refreshStudyUI,0);
   window.scrollTo({top:0,behavior:'smooth'});
 }
 function modeInfo(){
@@ -36,6 +37,23 @@ function updateAnalysisSummary(){
   }
   applyTableLimit();
 }
+function studyName(mode){return mode==='repeatability'?'Same-board repeatability · one machine':mode==='process'?'Different boards · production process variation':'Crossed GR&R · multiple machines'}
+function refreshStudyUI(){
+  const mode=window.XGRRStudy?.effectiveMode?.();if(!mode)return;
+  const intro=document.querySelector('#optimizerView .tool-intro p');
+  if(intro)intro.innerHTML=`<b>Study mode: ${studyName(mode)}.</b> The optimizer uses the Measurement and Filter rules configured in Analysis and returns the lowest variation score it can calculate in the selected threshold range.`;
+  const hint=document.querySelector('#grrOptimizer .hint.strong');
+  if(hint)hint.innerHTML=mode==='repeatability'?'<b>Same-board Repeatability:</b> PCB IDs are treated as repeated inspections of the same physical board. Only one machine is required. The optimizer finds the threshold with the lowest repeatability variation.':mode==='process'?'<b>Production Process:</b> each PCB ID is treated as a different physical board. The optimizer finds the threshold with the lowest board/process variation.':'<b>Crossed GR&R:</b> use this mode when the same pins are repeatedly measured by two or more machines.';
+  const minLabel=$('optMinParts')?.previousElementSibling;if(minLabel)minLabel.textContent='Preferred common/repeated pins (0 = off)';
+  if($('optimizeBtn'))$('optimizeBtn').textContent='Find lowest available variation';
+}
+function loadStudyMode(){
+  if(window.XGRRStudy){refreshStudyUI();return}
+  const s=document.createElement('script');s.src='study-mode.js';s.onload=()=>{
+    refreshStudyUI();
+    ['studyMode','studyMachine','boardInterpretation'].forEach(id=>$(id)?.addEventListener('change',()=>setTimeout(refreshStudyUI,0)));
+  };s.onerror=()=>console.error('Failed to load study-mode.js');document.body.appendChild(s);
+}
 function init(){
   document.querySelectorAll('.nav-tab').forEach(b=>b.addEventListener('click',()=>showView(b.dataset.view)));
   $('backToAnalysis')?.addEventListener('click',()=>showView('analysis'));
@@ -49,8 +67,8 @@ function init(){
   const results=$('results');if(results)new MutationObserver(()=>{if(!results.classList.contains('hidden'))setTimeout(updateAnalysisSummary,0)}).observe(results,{attributes:true,attributeFilter:['class']});
   const pinTable=$('pinTable');if(pinTable)new MutationObserver(()=>applyTableLimit()).observe(pinTable,{childList:true});
   $('partMode')?.addEventListener('change',()=>setTimeout(updateAnalysisSummary,0));
-  showView('analysis');
+  showView('analysis');loadStudyMode();
 }
-window.XGRRUI={showView,updateAnalysisSummary,applyTableLimit};
+window.XGRRUI={showView,updateAnalysisSummary,applyTableLimit,refreshStudyUI};
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
 })();
