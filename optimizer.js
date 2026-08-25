@@ -4,7 +4,7 @@ const C=window.XGRRCore,$=id=>document.getElementById(id);
 const A=()=>window.XGRRApp;
 let lastResult=null;
 const fmt=(v,d=3)=>Number.isFinite(+v)?(+v).toFixed(d):'—';
-const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const esc=s=>String(s??'').replace(/[&<>\"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[c]));
 const nap=(n=0)=>new Promise(r=>setTimeout(r,n));
 function resetOutput(){
   lastResult=null;
@@ -38,7 +38,7 @@ function partHits(d,rules,idx,direction,t){
   }
   return false;
 }
-async function scan(prep,from,to,step,direction,minParts){
+async function scan(prep,from,to,step,direction,preferredParts){
   const lo=Math.min(from,to),hi=Math.max(from,to),thresholds=[];
   for(let t=lo;t<=hi+step*1e-8;t+=step)thresholds.push(+t.toFixed(10));
   if(thresholds.length>500)throw new Error('Too many thresholds. Increase Step so the scan has 500 points or fewer.');
@@ -47,10 +47,12 @@ async function scan(prep,from,to,step,direction,minParts){
     const t=thresholds[i],selected=[];
     for(const d of allParts)if(partHits(d,prep.rules,prep.ruleIndex,direction,t)&&d.rows.length)selected.push(d);
     const rows=selected.flatMap(d=>d.rows),b=prep.app.balanced(rows);
-    const base={threshold:t,valid:false,selectedParts:selected.length,commonParts:b.common.length,measurements:rows.length,machines:b.machines.length,repeats:b.min,balancedRows:b.rows.length};
-    if(b.machines.length>=2&&b.common.length>=minParts&&b.min>=2){
+    const base={threshold:t,valid:false,recommended:false,selectedParts:selected.length,commonParts:b.common.length,measurements:rows.length,machines:b.machines.length,repeats:b.min,balancedRows:b.rows.length};
+    // Mathematical minimum for crossed GR&R: >=2 machines, >=2 common parts, >=2 repeats/cell.
+    // preferredParts is advisory only and must never hide a computable result.
+    if(b.machines.length>=2&&b.common.length>=2&&b.min>=2){
       const g=C.calculateCrossedANOVA(b.rows.map(r=>({part:r.part,machine:r.machine,value:r.value})));
-      if(g.ok&&Number.isFinite(g.pctStudyVariation))Object.assign(base,{valid:true,pctGRR:g.pctStudyVariation,pctContribution:g.pctContribution,ndc:g.ndc,repeatability:g.variance.repeatability,reproducibility:g.variance.reproducibility,partToPart:g.variance.partToPart});
+      if(g.ok&&Number.isFinite(g.pctStudyVariation))Object.assign(base,{valid:true,recommended:b.common.length>=preferredParts,pctGRR:g.pctStudyVariation,pctContribution:g.pctContribution,ndc:g.ndc,repeatability:g.variance.repeatability,reproducibility:g.variance.reproducibility,partToPart:g.variance.partToPart});
     }
     results.push(base);
     if(i%4===0||i===thresholds.length-1){
@@ -64,20 +66,26 @@ function render(result){
   lastResult=result;
   const out=$('optimizerOutput'),valid=result.results.filter(x=>x.valid).sort((a,b)=>a.pctGRR-b.pctGRR);
   if(!valid.length){
-    out.innerHTML=`<div class="opt-warning"><b>No valid GR&R candidate in this range.</b><br>Need at least 2 machines, 2 repeats per Part × Machine cell, and ${result.minParts} common parts.</div>`;
+    const maxMachines=Math.max(0,...result.results.map(x=>x.machines||0));
+    const maxCommon=Math.max(0,...result.results.map(x=>x.commonParts||0));
+    const maxRepeats=Math.max(0,...result.results.map(x=>x.repeats||0));
+    out.innerHTML=`<div class="opt-warning"><b>No mathematically valid crossed GR&R candidate in this range.</b><br>This is not a %GRR target problem. A crossed GR&R calculation needs at least 2 machines, 2 common parts and 2 repeats per Part × Machine cell.<br><br><b>Best data availability found in this scan:</b><br>Machines: ${maxMachines}<br>Common parts: ${maxCommon}<br>Repeats per cell: ${maxRepeats}</div>`;
     return;
   }
+  // Always choose the lowest GR&R that can actually be calculated.
   const best=valid[0],unit=result.filterMetric?.unit?` ${result.filterMetric.unit}`:'';
   $('optBestValue').textContent=`${result.direction} ${fmt(best.threshold,4)}${unit}`;
   $('optBestGRR').textContent=`${fmt(best.pctGRR,2)}%`;
   $('optBestParts').textContent=best.commonParts.toLocaleString();
   $('optBestNdc').textContent=best.ndc===Infinity?'∞':best.ndc;
-  const top=valid.slice(0,25);
-  out.innerHTML=`<div class="opt-note"><b>Measurement:</b> ${esc(result.measurementMetric.fullLabel)}<br><b>Optimized filter:</b> Rule ${result.ruleIndex+1} · ${esc(result.filterMetric.fullLabel)}. The same imported data is used to choose the threshold and estimate GR&R, so confirm the chosen threshold with a new study / Minitab before making it a production criterion.</div>
-  <div class="opt-table-wrap"><table class="opt-table"><thead><tr><th>Rank</th><th>Threshold</th><th>%GRR</th><th>%Contribution</th><th>Common parts</th><th>Measurements</th><th>Repeats</th><th>ndc</th></tr></thead><tbody>
-  ${top.map((r,i)=>`<tr class="${i===0?'best':''}"><td>${i+1}</td><td>${result.direction} ${fmt(r.threshold,4)}${unit}</td><td>${fmt(r.pctGRR,2)}%</td><td>${fmt(r.pctContribution,2)}%</td><td>${r.commonParts}</td><td>${r.measurements}</td><td>${r.repeats}</td><td>${r.ndc===Infinity?'∞':r.ndc}</td></tr>`).join('')}
+  const top=valid.slice(0,25),confidence=best.commonParts>=result.preferredParts
+    ? `<b>Data coverage:</b> ${best.commonParts} common parts meets your preferred minimum of ${result.preferredParts}.`
+    : `<b>Coverage warning:</b> the lowest available %GRR uses ${best.commonParts} common parts, below your preferred ${result.preferredParts}. The result is still shown instead of being discarded.`;
+  out.innerHTML=`<div class="opt-note"><b>Lowest available result in the scanned range:</b> ${fmt(best.pctGRR,2)}% at threshold ${result.direction} ${fmt(best.threshold,4)}${unit}. There is no requirement for GR&R to be below 1%.<br>${confidence}<br><br><b>Measurement:</b> ${esc(result.measurementMetric.fullLabel)}<br><b>Optimized filter:</b> Rule ${result.ruleIndex+1} · ${esc(result.filterMetric.fullLabel)}. Confirm an optimized threshold with an independent study / Minitab before using it as a production criterion.</div>
+  <div class="opt-table-wrap"><table class="opt-table"><thead><tr><th>Rank</th><th>Threshold</th><th>%GRR</th><th>%Contribution</th><th>Common parts</th><th>Coverage</th><th>Measurements</th><th>Repeats</th><th>ndc</th></tr></thead><tbody>
+  ${top.map((r,i)=>`<tr class="${i===0?'best':''}"><td>${i+1}</td><td>${result.direction} ${fmt(r.threshold,4)}${unit}</td><td>${fmt(r.pctGRR,2)}%</td><td>${fmt(r.pctContribution,2)}%</td><td>${r.commonParts}</td><td>${r.recommended?'Preferred':'Low'}</td><td>${r.measurements}</td><td>${r.repeats}</td><td>${r.ndc===Infinity?'∞':r.ndc}</td></tr>`).join('')}
   </tbody></table></div>
-  <div class="opt-actions"><button id="applyBestThreshold" class="primary">Apply best threshold & analyze</button><button id="downloadOptCsv" class="ghost">Export optimizer CSV</button></div>`;
+  <div class="opt-actions"><button id="applyBestThreshold" class="primary">Apply lowest-GR&R threshold & analyze</button><button id="downloadOptCsv" class="ghost">Export optimizer CSV</button></div>`;
   $('applyBestThreshold').onclick=async()=>{
     if(result.app.applyRuleThreshold(result.ruleIndex,result.direction,best.threshold)){
       result.app.toast(`Applied Rule ${result.ruleIndex+1}: ${result.direction} ${best.threshold}`);
@@ -87,22 +95,22 @@ function render(result){
   $('downloadOptCsv').onclick=()=>downloadCsv(result.results.filter(x=>x.valid),result);
 }
 function downloadCsv(rows,result){
-  const cols=['Threshold','Direction','GRR_Percent','Contribution_Percent','Common_Parts','Selected_Parts','Measurements','Machines','Repeats','NDC','Filter_Metric','Measurement_Metric'];
+  const cols=['Threshold','Direction','GRR_Percent','Contribution_Percent','Common_Parts','Preferred_Coverage','Selected_Parts','Measurements','Machines','Repeats','NDC','Filter_Metric','Measurement_Metric'];
   const lines=[cols.join(',')],q=v=>`"${String(v??'').replaceAll('"','""')}"`;
-  for(const r of [...rows].sort((a,b)=>a.threshold-b.threshold))lines.push([r.threshold,result.direction,r.pctGRR,r.pctContribution,r.commonParts,r.selectedParts,r.measurements,r.machines,r.repeats,r.ndc===Infinity?'Infinity':r.ndc,q(result.filterMetric.fullLabel),q(result.measurementMetric.fullLabel)].join(','));
+  for(const r of [...rows].sort((a,b)=>a.threshold-b.threshold))lines.push([r.threshold,result.direction,r.pctGRR,r.pctContribution,r.commonParts,r.recommended?'Yes':'No',r.selectedParts,r.measurements,r.machines,r.repeats,r.ndc===Infinity?'Infinity':r.ndc,q(result.filterMetric.fullLabel),q(result.measurementMetric.fullLabel)].join(','));
   const blob=new Blob([lines.join('\n')],{type:'text/csv;charset=utf-8'}),u=URL.createObjectURL(blob),a=document.createElement('a');a.href=u;a.download='GRR_Optimizer_Threshold_Scan.csv';a.click();setTimeout(()=>URL.revokeObjectURL(u),1000);
 }
 async function optimize(){
   const app=A();try{
     resetOutput();
-    const prep=makePrepared(),from=+$('optFrom').value,to=+$('optTo').value,step=+$('optStep').value,minParts=Math.max(2,Math.floor(+$('optMinParts').value||10)),direction=$('optDirection').value;
+    const prep=makePrepared(),from=+$('optFrom').value,to=+$('optTo').value,step=+$('optStep').value,preferredParts=Math.max(2,Math.floor(+$('optMinParts').value||10)),direction=$('optDirection').value;
     if(![from,to,step].every(Number.isFinite)||step<=0)throw new Error('Check optimizer range and step.');
     const filterKey=prep.rules[prep.ruleIndex].metric,filterMetric=prep.S.metrics.get(filterKey),measurementMetric=prep.S.metrics.get(prep.measurementMetric);
     app.progress('GR&R Optimizer','Preparing Part / Machine matrix…',8,`${filterMetric?.fullLabel||filterKey} → ${measurementMetric?.fullLabel||prep.measurementMetric}`);await nap(20);
-    const results=await scan(prep,from,to,step,direction,minParts);
-    app.progress('GR&R Optimizer','Ranking valid thresholds…',96);await nap(20);
-    const result={...prep,results,from,to,step,direction,minParts,filterMetric,measurementMetric};
-    render(result);app.progress('Done','GR&R threshold optimization ready.',100);await nap(100);app.hideProgress();
+    const results=await scan(prep,from,to,step,direction,preferredParts);
+    app.progress('GR&R Optimizer','Ranking all calculable thresholds from lowest %GRR…',96);await nap(20);
+    const result={...prep,results,from,to,step,direction,preferredParts,filterMetric,measurementMetric};
+    render(result);app.progress('Done','Lowest available GR&R threshold search ready.',100);await nap(100);app.hideProgress();
   }catch(e){app?.hideProgress();console.error(e);$('optimizerOutput').innerHTML=`<div class="opt-warning"><b>Optimizer stopped.</b><br>${esc(e.message||e)}</div>`;app?.toast(e.message||'Optimizer failed')}
 }
 function sync(){
