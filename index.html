@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <meta name="theme-color" content="#0b1220" />
+  <meta name="description" content="Local-first X-ray Flat Void data filter, Minitab export and quick Gage R&R screening." />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="styles.css" />
+  <title>X-Ray Void GR&R Studio</title>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><div class="logo">XR</div><div><strong>X-Ray Void GR&R Studio</strong><span>Flat Void screening & Minitab prep</span></div></div>
+    <div class="privacy-pill"><span class="dot"></span>Local processing</div>
+  </header>
+
+  <main class="shell">
+    <section class="hero panel">
+      <div>
+        <p class="eyebrow">WORKFLOW</p>
+        <h1>Upload → Filter Pins → Review → Export</h1>
+        <p>Filter with any inspection metric (for example Maximum Void Ratio), then analyze a separate measurement metric (for example Flat Void Ratio). If a pin meets the rule once, all repeats of that pin are retained by default.</p>
+      </div>
+      <label class="upload-button"><input id="fileInput" type="file" accept=".csv,text/csv" multiple hidden><span>＋</span> Add X-ray CSV files</label>
+    </section>
+
+    <section class="grid two">
+      <div class="panel">
+        <div class="section-head"><div><p class="eyebrow">1 · INPUT</p><h2>Imported runs</h2></div><span id="fileCount" class="badge">0 files</span></div>
+        <div id="fileList" class="empty-state">No CSV loaded yet.</div>
+      </div>
+
+      <div class="panel">
+        <div class="section-head"><div><p class="eyebrow">2 · MEASUREMENT</p><h2>GR&R value</h2></div></div>
+        <label class="field"><span>Measurement metric</span><select id="measurementMetric" disabled><option>Import CSV first</option></select></label>
+        <div class="hint">Default: <b>Flat void · Void Ratio [%]</b>. This is the value exported to the Minitab Measurement column.</div>
+        <label class="field"><span>Part ID</span><select id="partMode"><option value="component_pin">Component + Pin (recommended)</option><option value="component">Component only</option></select></label>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="section-head"><div><p class="eyebrow">3 · PIN SELECTION</p><h2>Filter rules</h2></div><div class="row"><select id="ruleJoin" class="small-select"><option value="ALL">All rules</option><option value="ANY">Any rule</option></select><button id="addRule" class="ghost" disabled>＋ Add rule</button></div></div>
+      <div class="hint strong">Selection mode: if a Part/Pin satisfies the filter in <b>at least one uploaded run</b>, the program keeps that Part/Pin from every available run/machine for GR&R.</div>
+      <div id="rules" class="rules"></div>
+      <div class="actions"><button id="analyzeBtn" class="primary" disabled>Analyze selected pins</button><button id="resetBtn" class="ghost">Reset</button></div>
+    </section>
+
+    <section id="results" class="results hidden">
+      <div class="stats-grid">
+        <div class="stat"><span>Selected parts</span><b id="statParts">—</b><small>Component_Pin</small></div>
+        <div class="stat"><span>Measurements</span><b id="statMeasurements">—</b><small>rows for Minitab</small></div>
+        <div class="stat"><span>Machines</span><b id="statMachines">—</b><small>appraisers</small></div>
+        <div class="stat"><span>Quick %GRR</span><b id="statGRR">—</b><small id="grrStatus">screening only</small></div>
+      </div>
+
+      <div class="grid two">
+        <div class="panel">
+          <div class="section-head"><div><p class="eyebrow">QUICK GAGE R&R</p><h2>Crossed ANOVA screening</h2></div></div>
+          <div id="grrPanel" class="grr-panel"></div>
+        </div>
+        <div class="panel">
+          <div class="section-head"><div><p class="eyebrow">DATA QUALITY</p><h2>Completeness</h2></div></div>
+          <div id="qualityPanel"></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="section-head"><div><p class="eyebrow">PIN STABILITY</p><h2>Most unstable selected pins</h2></div><input id="tableSearch" class="search" placeholder="Search component or pin…"></div>
+        <div class="table-wrap"><table><thead><tr><th>Part</th><th>N</th><th>Mean</th><th>Min</th><th>Max</th><th>Range</th><th>SD</th><th>CV%</th><th>Filter min</th><th>Filter max</th></tr></thead><tbody id="pinTable"></tbody></table></div>
+      </div>
+
+      <div class="export-bar panel">
+        <div><p class="eyebrow">OUTPUT</p><h2>Ready for Minitab</h2><p>Excel includes Minitab_GRR, Selected_Pins, Pin_Stability, GRR_Summary, All_Selected_Data, Import_Log and Settings.</p></div>
+        <button id="exportBtn" class="primary success">Export Excel (.xlsx)</button>
+      </div>
+    </section>
+  </main>
+
+  <div id="progressModal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="progress-card">
+      <div class="spinner"></div>
+      <p id="progressEyebrow" class="eyebrow">PROCESSING</p>
+      <h2 id="progressTitle">Reading data…</h2>
+      <p id="progressMessage">Please keep this page open.</p>
+      <div class="progress-track"><div id="progressBar"></div></div>
+      <div class="progress-meta"><span id="progressPct">0%</span><span id="progressDetail"></span></div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.5.3/papaparse.min.js"></script>
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+  <script src="core.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
