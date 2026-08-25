@@ -1,5 +1,7 @@
 # X-Ray Void GR&R Studio
 
+Version 1.0.0 — GitHub Pages PWA for X-ray Flat Void screening and GR&R preparation.
+
 Static PWA for Omron-style X-ray inspection CSV exports. It runs locally in the browser and does not upload CSV content to a server.
 
 ## Main workflow
