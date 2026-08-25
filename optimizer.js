@@ -1,32 +1,123 @@
 (() => {
 'use strict';
-const C=window.XGRRCore;
-if(!C) return;
-const $=id=>document.getElementById(id);
-const fileStore=new Map();
+const C=window.XGRRCore,$=id=>document.getElementById(id);
+const A=()=>window.XGRRApp;
 let lastResult=null;
 const fmt=(v,d=3)=>Number.isFinite(+v)?(+v).toFixed(d):'—';
-const esc=s=>String(s??'').replace(/[&<>\"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[c]));
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const nap=(n=0)=>new Promise(r=>setTimeout(r,n));
-function fileKey(f){return `${f.name}\u0000${f.size}\u0000${f.lastModified}`}
-function cacheFiles(list){[...list].forEach(f=>fileStore.set(fileKey(f),f))}
-function activeFiles(){const visible=[...document.querySelectorAll('.file-card .file-main b')].map(x=>x.textContent);if(!visible.length)return [...fileStore.values()];const used=new Set(),out=[];for(const f of fileStore.values()){const i=visible.findIndex((n,j)=>!used.has(j)&&n===f.name);if(i>=0){used.add(i);out.push(f)}}return out}
-function manualMachine(name){for(const card of document.querySelectorAll('.file-card')){const n=card.querySelector('.file-main b')?.textContent;if(n===name)return card.querySelector('.machine-input')?.value?.trim()||''}return ''}
-function machine(path,meta,name){const s=[path||'',meta['System Name']||'',name||''].join(' '),x=s.match(/VT-X750[-_ ]?(\d{3,8})/i)||s.match(/(?:machine|m)[-_ ]?(\d{3,8})/i);return x?x[1]:(meta['System Name']||'Unknown')}
-async function meta(file){const ls=(await file.slice(0,8192).text()).split(/\r?\n/),k=(Papa.parse(ls[0]||'').data[0]||[]),v=(Papa.parse(ls[1]||'').data[0]||[]),o={};k.forEach((x,i)=>o[x]=v[i]||'');return o}
-function prog(t,m,p=0,d=''){const modal=$('progressModal');if(!modal)return;modal.classList.remove('hidden');$('progressTitle').textContent=t;$('progressMessage').textContent=m;$('progressBar').style.width=Math.max(0,Math.min(100,p))+'%';$('progressPct').textContent=Math.round(p)+'%';$('progressDetail').textContent=d}
-function hide(){setTimeout(()=>$('progressModal')?.classList.add('hidden'),120)}
-function toast(t){const x=$('toast');if(!x)return;x.textContent=t;x.classList.remove('hidden');setTimeout(()=>x.classList.add('hidden'),3000)}
-function metricInfo(){const rule=document.querySelector('#rules .rule');const rm=rule?.querySelector('.rm'),mm=$('measurementMetric');return {filterMetric:rm?.value||'',filterLabel:rm?.selectedOptions?.[0]?.textContent||'Current filter metric',measurementMetric:mm?.value||'',measurementLabel:mm?.selectedOptions?.[0]?.textContent||'Current measurement'}}
-function balanced(rows){const ms=[...new Set(rows.map(r=>r.machine))],ps=[...new Set(rows.map(r=>r.part))],cell=new Map();rows.forEach(r=>{const k=r.part+'\0'+r.machine;if(!cell.has(k))cell.set(k,[]);cell.get(k).push(r)});const common=ps.filter(p=>ms.every(m=>(cell.get(p+'\0'+m)||[]).length>=2)),min=common.length?Math.min(...common.flatMap(p=>ms.map(m=>cell.get(p+'\0'+m).length))):0,out=[];common.forEach(p=>ms.forEach(m=>out.push(...cell.get(p+'\0'+m).slice(0,min))));return {rows:out,common,min,machines:ms}}
-async function readForOptimizer(files,filterMetric,measurementMetric){const samples=[];for(const [fi,file] of files.entries()){const m=await meta(file),map=new Map();let detected='';prog('Optimizer · Reading CSV',file.name,5+35*(fi/files.length),`${fi+1}/${files.length}`);await new Promise((ok,bad)=>Papa.parse(file,{header:true,worker:true,skipEmptyLines:'greedy',chunkSize:2*1024*1024,beforeFirstChunk:c=>c.split(/\r?\n/).slice(3).join('\n'),chunk:r=>{for(const row of r.data){if(!detected&&row['Volume Data Path'])detected=machine(String(row['Volume Data Path']),m,file.name);const mk=C.metricKey(row);if(mk!==filterMetric&&mk!==measurementMetric)continue;const y=+row.Measured,comp=String(row['Component Name']||'').trim(),pin=String(row['Pin Number']||'').trim();if(!Number.isFinite(y)||!comp||!pin)continue;const key=[row['PCB ID']||row['PCB No.']||'',comp,pin,row.Individual||''].join('\u0001');let s=map.get(key);if(!s){s={component:comp,pin,filter:NaN,measurement:NaN};map.set(key,s)}if(mk===filterMetric)s.filter=y;if(mk===measurementMetric)s.measurement=y}const cur=r.meta?.cursor||0;prog('Optimizer · Reading CSV',file.name,5+35*((fi+Math.min(1,cur/file.size))/files.length),`${(cur/1048576).toFixed(1)} / ${(file.size/1048576).toFixed(1)} MB`)},complete:ok,error:bad}));const mach=manualMachine(file.name)||detected||machine('',m,file.name);for(const s of map.values())samples.push({...s,machine:mach,fileName:file.name})}return samples}
-function buildParts(samples){const componentOnly=$('partMode')?.value==='component',parts=new Map();for(const s of samples){if(!Number.isFinite(s.measurement))continue;const p=componentOnly?s.component:`${s.component}_${s.pin}`;let d=parts.get(p);if(!d){d={part:p,filterValues:[],rows:[],min:Infinity,max:-Infinity};parts.set(p,d)}if(Number.isFinite(s.filter)){d.filterValues.push(s.filter);d.min=Math.min(d.min,s.filter);d.max=Math.max(d.max,s.filter)}d.rows.push({part:p,machine:s.machine,value:s.measurement})}return parts}
-function scanThresholds(parts,from,to,step,direction,minParts){const thresholds=[];const lo=Math.min(from,to),hi=Math.max(from,to);for(let t=lo;t<=hi+step*1e-8;t+=step)thresholds.push(+t.toFixed(10));if(thresholds.length>400)throw new Error('Too many thresholds. Increase Step so the scan has 400 points or fewer.');const results=[];for(let i=0;i<thresholds.length;i++){const t=thresholds[i],selected=[];for(const d of parts.values()){if(!d.filterValues.length)continue;const hit=direction==='>'?d.max>t:d.min<t;if(hit)selected.push(d)}const rows=selected.flatMap(d=>d.rows),b=balanced(rows);if(b.machines.length<2||b.common.length<minParts||b.min<2){results.push({threshold:t,valid:false,selectedParts:selected.length,commonParts:b.common.length,measurements:rows.length,machines:b.machines.length,repeats:b.min});continue}const g=C.calculateCrossedANOVA(b.rows);if(g.ok&&Number.isFinite(g.pctStudyVariation))results.push({threshold:t,valid:true,selectedParts:selected.length,commonParts:b.common.length,measurements:rows.length,machines:b.machines.length,repeats:b.min,balancedRows:b.rows.length,pctGRR:g.pctStudyVariation,pctContribution:g.pctContribution,ndc:g.ndc,repeatability:g.variance.repeatability,reproducibility:g.variance.reproducibility,partToPart:g.variance.partToPart});else results.push({threshold:t,valid:false,selectedParts:selected.length,commonParts:b.common.length,measurements:rows.length,machines:b.machines.length,repeats:b.min})}return results}
-function render(result){lastResult=result;const out=$('optimizerOutput');const valid=result.results.filter(x=>x.valid).sort((a,b)=>a.pctGRR-b.pctGRR);if(!valid.length){out.innerHTML=`<div class="opt-warning"><b>No valid GR&R candidate in this range.</b><br>Need at least 2 machines, 2 repeats per Part × Machine cell, and ${result.minParts} common parts.</div>`;return}const best=valid[0];$('optBestValue').textContent=`${result.direction} ${fmt(best.threshold,3)}%`;$('optBestGRR').textContent=`${fmt(best.pctGRR,2)}%`;$('optBestParts').textContent=best.commonParts.toLocaleString();$('optBestNdc').textContent=best.ndc===Infinity?'∞':best.ndc;const top=valid.slice(0,20);out.innerHTML=`<div class="opt-note">Exploratory optimization only: the same data is being used to choose the threshold and estimate GR&R. Confirm the selected threshold with a new study / Minitab before using it as a production criterion.</div><div class="opt-table-wrap"><table class="opt-table"><thead><tr><th>Rank</th><th>Threshold</th><th>%GRR</th><th>%Contribution</th><th>Common parts</th><th>Measurements</th><th>Repeats</th><th>ndc</th></tr></thead><tbody>${top.map((r,i)=>`<tr class="${i===0?'best':''}"><td>${i+1}</td><td>${esc(result.filterLabel)} ${result.direction} ${fmt(r.threshold,3)}</td><td>${fmt(r.pctGRR,2)}%</td><td>${fmt(r.pctContribution,2)}%</td><td>${r.commonParts}</td><td>${r.measurements}</td><td>${r.repeats}</td><td>${r.ndc===Infinity?'∞':r.ndc}</td></tr>`).join('')}</tbody></table></div><div class="opt-actions"><button id="applyBestThreshold" class="primary">Apply best threshold & analyze</button><button id="downloadOptCsv" class="ghost">Export optimizer CSV</button></div>`;$('applyBestThreshold').onclick=()=>applyBest(best,result);$('downloadOptCsv').onclick=()=>downloadCsv(result.results.filter(x=>x.valid),result)}
-function applyBest(best,result){const rule=document.querySelector('#rules .rule');if(!rule)return toast('Filter rule not found.');const op=rule.querySelector('.ro'),a=rule.querySelector('.ra'),metric=rule.querySelector('.rm');metric.value=result.filterMetric;metric.dispatchEvent(new Event('change',{bubbles:true}));op.value=result.direction;op.dispatchEvent(new Event('change',{bubbles:true}));a.value=best.threshold;a.dispatchEvent(new Event('change',{bubbles:true}));$('analyzeBtn')?.click();toast(`Applied ${result.direction} ${best.threshold}`)}
-function downloadCsv(rows,result){const cols=['Threshold','Direction','GRR_Percent','Contribution_Percent','Common_Parts','Selected_Parts','Measurements','Machines','Repeats','NDC'];const lines=[cols.join(',')];for(const r of rows.sort((a,b)=>a.threshold-b.threshold))lines.push([r.threshold,result.direction,r.pctGRR,r.pctContribution,r.commonParts,r.selectedParts,r.measurements,r.machines,r.repeats,r.ndc===Infinity?'Infinity':r.ndc].join(','));const blob=new Blob([lines.join('\n')],{type:'text/csv;charset=utf-8'}),u=URL.createObjectURL(blob),a=document.createElement('a');a.href=u;a.download='GRR_Optimizer_Threshold_Scan.csv';a.click();setTimeout(()=>URL.revokeObjectURL(u),1000)}
-async function optimize(){try{if(!window.Papa)return toast('CSV library unavailable.');const files=activeFiles();if(!files.length)return toast('Import X-ray CSV files first.');const {filterMetric,filterLabel,measurementMetric,measurementLabel}=metricInfo();if(!filterMetric||!measurementMetric)return toast('Choose measurement and filter metrics first.');const from=+$('optFrom').value,to=+$('optTo').value,step=+$('optStep').value,minParts=Math.max(2,Math.floor(+$('optMinParts').value||10)),direction=$('optDirection').value;if(![from,to,step].every(Number.isFinite)||step<=0)return toast('Check optimizer range and step.');$('optimizerOutput').innerHTML='';prog('GR&R Optimizer','Preparing threshold scan…',2,`${filterLabel} → ${measurementLabel}`);const samples=await readForOptimizer(files,filterMetric,measurementMetric);prog('GR&R Optimizer','Building Part / Machine matrix…',45,`${samples.length.toLocaleString()} samples`);await nap(20);const parts=buildParts(samples);const count=Math.floor(Math.abs(to-from)/step)+1;prog('GR&R Optimizer',`Testing ${count} thresholds…`,58,`${Math.min(from,to)} → ${Math.max(from,to)}`);await nap(20);const results=scanThresholds(parts,from,to,step,direction,minParts);prog('GR&R Optimizer','Ranking valid thresholds…',94);await nap(20);render({results,filterMetric,filterLabel,measurementMetric,measurementLabel,direction,minParts,from,to,step});prog('Done','GR&R threshold optimization ready.',100);hide()}catch(e){hide();console.error(e);$('optimizerOutput').innerHTML=`<div class="opt-warning"><b>Optimizer stopped.</b><br>${esc(e.message||e)}</div>`}}
-function inject(){const anchor=document.querySelector('#rules')?.closest('section.panel');if(!anchor||$('grrOptimizer'))return;anchor.insertAdjacentHTML('afterend',`<section id="grrOptimizer" class="panel optimizer-panel"><div class="section-head"><div><p class="eyebrow">4 · GR&R OPTIMIZER</p><h2>Find the best filter threshold</h2></div><span class="badge">Exploratory</span></div><p class="hint strong">Uses the <b>first Pin Selection filter metric</b> as the scan variable and the current <b>GR&R value</b> as the measurement. Example: scan Maximum Void Ratio thresholds and find where Void Ratio gives the lowest Quick %GRR.</p><div class="opt-grid"><label class="field"><span>Direction</span><select id="optDirection"><option value=">">Greater than (&gt;)</option><option value="<">Less than (&lt;)</option></select></label><label class="field"><span>Search from</span><input id="optFrom" type="number" step="any" value="5"></label><label class="field"><span>Search to</span><input id="optTo" type="number" step="any" value="20"></label><label class="field"><span>Step</span><input id="optStep" type="number" step="any" min="0.000001" value="0.25"></label><label class="field"><span>Minimum common parts</span><input id="optMinParts" type="number" min="2" step="1" value="10"></label></div><div class="actions"><button id="optimizeBtn" class="primary" disabled>Search best GR&R threshold</button></div><div class="opt-best-grid"><div class="opt-best"><span>Best threshold</span><b id="optBestValue">—</b></div><div class="opt-best"><span>Quick %GRR</span><b id="optBestGRR">—</b></div><div class="opt-best"><span>Common parts</span><b id="optBestParts">—</b></div><div class="opt-best"><span>ndc</span><b id="optBestNdc">—</b></div></div><div id="optimizerOutput"></div></section>`);$('optimizeBtn').onclick=optimize;const fi=$('fileInput');if(fi){fi.addEventListener('change',e=>{cacheFiles(e.target.files);setTimeout(()=>{$('optimizeBtn').disabled=!document.querySelector('#rules .rule .rm')},300)})}const reset=$('resetBtn');if(reset)reset.addEventListener('click',()=>{fileStore.clear();lastResult=null;setTimeout(()=>{$('optimizeBtn').disabled=true;$('optimizerOutput').innerHTML='';$('optBestValue').textContent=$('optBestGRR').textContent=$('optBestParts').textContent=$('optBestNdc').textContent='—'},0)});const mo=new MutationObserver(()=>{$('optimizeBtn').disabled=!document.querySelector('#rules .rule .rm')});mo.observe($('rules'),{childList:true,subtree:true})}
-function injectStyle(){if($('optimizerStyle'))return;const s=document.createElement('style');s.id='optimizerStyle';s.textContent=`.optimizer-panel{margin-top:18px}.opt-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;margin-top:16px}.opt-grid input,.opt-grid select{width:100%;box-sizing:border-box;background:#0c1627;border:1px solid #26354d;color:#eef5ff;border-radius:10px;padding:11px}.opt-best-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-top:16px}.opt-best{border:1px solid #26354d;background:#0c1627;border-radius:14px;padding:14px}.opt-best span{display:block;color:#90a3bb;font-size:12px;margin-bottom:5px}.opt-best b{font-size:21px}.opt-note,.opt-warning{margin-top:16px;border-radius:12px;padding:13px 14px;background:#101c30;border:1px solid #2a3d59;line-height:1.5}.opt-warning{border-color:#735b2c}.opt-table-wrap{overflow:auto;margin-top:14px}.opt-table{width:100%;border-collapse:collapse;min-width:760px}.opt-table th,.opt-table td{padding:10px;border-bottom:1px solid #20304a;text-align:left;white-space:nowrap}.opt-table tr.best{background:rgba(52,211,153,.08)}.opt-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}@media(max-width:900px){.opt-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.opt-best-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:520px){.opt-grid,.opt-best-grid{grid-template-columns:1fr}}`;document.head.appendChild(s)}
-if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>{injectStyle();inject()});else{injectStyle();inject()}
+function resetOutput(){
+  lastResult=null;
+  ['optBestValue','optBestGRR','optBestParts','optBestNdc'].forEach(id=>{if($(id))$(id).textContent='—'});
+  if($('optimizerOutput'))$('optimizerOutput').innerHTML='';
+}
+function selectedRuleIndex(){return Math.max(0,Math.floor(+$('optRule').value||0))}
+function makePrepared(){
+  const app=A(),S=app?.getState(),rules=app?.getCurrentRules()||[],measurementMetric=app?.getMeasurementMetric();
+  if(!app||!S?.samples?.length||!rules.length||!measurementMetric)throw new Error('Import data and configure measurement/filter rules first.');
+  const idx=selectedRuleIndex();if(idx>=rules.length)throw new Error('Selected optimizer rule no longer exists.');
+  const byPart=new Map();
+  for(const s of S.samples){
+    const p=app.getPartId(s);
+    let d=byPart.get(p);if(!d){d={part:p,samples:[],rows:[]};byPart.set(p,d)}
+    const values=rules.map(r=>s.metrics[r.metric]);
+    d.samples.push(values);
+    const mv=s.metrics[measurementMetric];
+    if(Number.isFinite(mv)){
+      const f=S.files.find(x=>x.id===s.fileId),mach=f?.machine||'Unknown';
+      d.rows.push({part:p,machine:mach,value:mv});
+    }
+  }
+  return {app,S,rules,measurementMetric,ruleIndex:idx,byPart};
+}
+function partHits(d,rules,idx,direction,t){
+  for(const values of d.samples){
+    const hits=rules.map((r,i)=>i===idx?C.compare(values[i],direction,t,r.b):C.compare(values[i],r.op,r.a,r.b));
+    const join=$('ruleJoin')?.value||'ALL';
+    if(join==='ALL'?hits.every(Boolean):hits.some(Boolean))return true;
+  }
+  return false;
+}
+async function scan(prep,from,to,step,direction,minParts){
+  const lo=Math.min(from,to),hi=Math.max(from,to),thresholds=[];
+  for(let t=lo;t<=hi+step*1e-8;t+=step)thresholds.push(+t.toFixed(10));
+  if(thresholds.length>500)throw new Error('Too many thresholds. Increase Step so the scan has 500 points or fewer.');
+  const results=[],allParts=[...prep.byPart.values()];
+  for(let i=0;i<thresholds.length;i++){
+    const t=thresholds[i],selected=[];
+    for(const d of allParts)if(partHits(d,prep.rules,prep.ruleIndex,direction,t)&&d.rows.length)selected.push(d);
+    const rows=selected.flatMap(d=>d.rows),b=prep.app.balanced(rows);
+    const base={threshold:t,valid:false,selectedParts:selected.length,commonParts:b.common.length,measurements:rows.length,machines:b.machines.length,repeats:b.min,balancedRows:b.rows.length};
+    if(b.machines.length>=2&&b.common.length>=minParts&&b.min>=2){
+      const g=C.calculateCrossedANOVA(b.rows.map(r=>({part:r.part,machine:r.machine,value:r.value})));
+      if(g.ok&&Number.isFinite(g.pctStudyVariation))Object.assign(base,{valid:true,pctGRR:g.pctStudyVariation,pctContribution:g.pctContribution,ndc:g.ndc,repeatability:g.variance.repeatability,reproducibility:g.variance.reproducibility,partToPart:g.variance.partToPart});
+    }
+    results.push(base);
+    if(i%4===0||i===thresholds.length-1){
+      prep.app.progress('GR&R Optimizer',`Testing threshold ${i+1} / ${thresholds.length}`,50+42*(i+1)/thresholds.length,`${direction} ${fmt(t,4)}`);
+      await nap(0);
+    }
+  }
+  return results;
+}
+function render(result){
+  lastResult=result;
+  const out=$('optimizerOutput'),valid=result.results.filter(x=>x.valid).sort((a,b)=>a.pctGRR-b.pctGRR);
+  if(!valid.length){
+    out.innerHTML=`<div class="opt-warning"><b>No valid GR&R candidate in this range.</b><br>Need at least 2 machines, 2 repeats per Part × Machine cell, and ${result.minParts} common parts.</div>`;
+    return;
+  }
+  const best=valid[0],unit=result.filterMetric?.unit?` ${result.filterMetric.unit}`:'';
+  $('optBestValue').textContent=`${result.direction} ${fmt(best.threshold,4)}${unit}`;
+  $('optBestGRR').textContent=`${fmt(best.pctGRR,2)}%`;
+  $('optBestParts').textContent=best.commonParts.toLocaleString();
+  $('optBestNdc').textContent=best.ndc===Infinity?'∞':best.ndc;
+  const top=valid.slice(0,25);
+  out.innerHTML=`<div class="opt-note"><b>Measurement:</b> ${esc(result.measurementMetric.fullLabel)}<br><b>Optimized filter:</b> Rule ${result.ruleIndex+1} · ${esc(result.filterMetric.fullLabel)}. The same imported data is used to choose the threshold and estimate GR&R, so confirm the chosen threshold with a new study / Minitab before making it a production criterion.</div>
+  <div class="opt-table-wrap"><table class="opt-table"><thead><tr><th>Rank</th><th>Threshold</th><th>%GRR</th><th>%Contribution</th><th>Common parts</th><th>Measurements</th><th>Repeats</th><th>ndc</th></tr></thead><tbody>
+  ${top.map((r,i)=>`<tr class="${i===0?'best':''}"><td>${i+1}</td><td>${result.direction} ${fmt(r.threshold,4)}${unit}</td><td>${fmt(r.pctGRR,2)}%</td><td>${fmt(r.pctContribution,2)}%</td><td>${r.commonParts}</td><td>${r.measurements}</td><td>${r.repeats}</td><td>${r.ndc===Infinity?'∞':r.ndc}</td></tr>`).join('')}
+  </tbody></table></div>
+  <div class="opt-actions"><button id="applyBestThreshold" class="primary">Apply best threshold & analyze</button><button id="downloadOptCsv" class="ghost">Export optimizer CSV</button></div>`;
+  $('applyBestThreshold').onclick=async()=>{
+    if(result.app.applyRuleThreshold(result.ruleIndex,result.direction,best.threshold)){
+      result.app.toast(`Applied Rule ${result.ruleIndex+1}: ${result.direction} ${best.threshold}`);
+      await result.app.analyze();
+    }
+  };
+  $('downloadOptCsv').onclick=()=>downloadCsv(result.results.filter(x=>x.valid),result);
+}
+function downloadCsv(rows,result){
+  const cols=['Threshold','Direction','GRR_Percent','Contribution_Percent','Common_Parts','Selected_Parts','Measurements','Machines','Repeats','NDC','Filter_Metric','Measurement_Metric'];
+  const lines=[cols.join(',')],q=v=>`"${String(v??'').replaceAll('"','""')}"`;
+  for(const r of [...rows].sort((a,b)=>a.threshold-b.threshold))lines.push([r.threshold,result.direction,r.pctGRR,r.pctContribution,r.commonParts,r.selectedParts,r.measurements,r.machines,r.repeats,r.ndc===Infinity?'Infinity':r.ndc,q(result.filterMetric.fullLabel),q(result.measurementMetric.fullLabel)].join(','));
+  const blob=new Blob([lines.join('\n')],{type:'text/csv;charset=utf-8'}),u=URL.createObjectURL(blob),a=document.createElement('a');a.href=u;a.download='GRR_Optimizer_Threshold_Scan.csv';a.click();setTimeout(()=>URL.revokeObjectURL(u),1000);
+}
+async function optimize(){
+  const app=A();try{
+    resetOutput();
+    const prep=makePrepared(),from=+$('optFrom').value,to=+$('optTo').value,step=+$('optStep').value,minParts=Math.max(2,Math.floor(+$('optMinParts').value||10)),direction=$('optDirection').value;
+    if(![from,to,step].every(Number.isFinite)||step<=0)throw new Error('Check optimizer range and step.');
+    const filterKey=prep.rules[prep.ruleIndex].metric,filterMetric=prep.S.metrics.get(filterKey),measurementMetric=prep.S.metrics.get(prep.measurementMetric);
+    app.progress('GR&R Optimizer','Preparing Part / Machine matrix…',8,`${filterMetric?.fullLabel||filterKey} → ${measurementMetric?.fullLabel||prep.measurementMetric}`);await nap(20);
+    const results=await scan(prep,from,to,step,direction,minParts);
+    app.progress('GR&R Optimizer','Ranking valid thresholds…',96);await nap(20);
+    const result={...prep,results,from,to,step,direction,minParts,filterMetric,measurementMetric};
+    render(result);app.progress('Done','GR&R threshold optimization ready.',100);await nap(100);app.hideProgress();
+  }catch(e){app?.hideProgress();console.error(e);$('optimizerOutput').innerHTML=`<div class="opt-warning"><b>Optimizer stopped.</b><br>${esc(e.message||e)}</div>`;app?.toast(e.message||'Optimizer failed')}
+}
+function sync(){
+  const app=A(),rules=app?.getCurrentRules?.()||[],opt=$('optRule'),btn=$('optimizeBtn');
+  if(!opt||!btn)return;
+  const old=+opt.value;
+  if(!rules.length){opt.innerHTML='<option>No filter rules</option>';opt.disabled=btn.disabled=true;resetOutput();return}
+  const S=app.getState();
+  opt.innerHTML=rules.map((r,i)=>`<option value="${i}">Rule ${i+1}: ${esc(S.metrics.get(r.metric)?.fullLabel||r.metric)}</option>`).join('');
+  opt.value=Number.isInteger(old)&&old<rules.length?String(old):'0';opt.disabled=btn.disabled=false;
+}
+$('optimizeBtn').onclick=optimize;
+$('optRule').onchange=resetOutput;
+const mo=new MutationObserver(sync);mo.observe($('rules'),{childList:true,subtree:true});
+$('fileList')&&new MutationObserver(sync).observe($('fileList'),{childList:true,subtree:true});
+$('resetBtn').addEventListener('click',()=>setTimeout(()=>{sync();resetOutput()},0));
+sync();
 })();
