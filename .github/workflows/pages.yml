@@ -18,6 +18,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: JavaScript syntax checks
+        run: |
+          node --check core.js
+          node --check app.js
+          node --check parser-shim.js
+          node --check ui.js
+          node --check study-mode.js
+          node --check optimizer.js
+      - name: Statistical regression tests
+        run: node tests/core-tests.cjs
       - uses: actions/configure-pages@v5
         with:
           enablement: true
