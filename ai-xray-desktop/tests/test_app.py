@@ -25,6 +25,9 @@ def test_volume_raw_and_size_guard(tmp_path):
     volume=read_volume(vgi,rec)
     assert volume.shape==vox.shape
     assert int(volume[2,3,4])==int(vox[2,3,4])
+    del volume
+    import gc
+    gc.collect()
     rec.write_bytes(b"ABC")
     import pytest
     with pytest.raises(ValueError,match="size mismatch"):
