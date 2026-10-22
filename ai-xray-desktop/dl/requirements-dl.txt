@@ -1,0 +1,4 @@
+torch>=2.3,<3
+numpy>=1.26,<3
+opencv-python>=4.8,<5
+pytest>=8,<10

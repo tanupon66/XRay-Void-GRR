@@ -1,0 +1,27 @@
+name: Deep Learning Model Tests
+on:
+  push:
+    branches: [main]
+    paths:
+      - "ai-xray-desktop/dl/**"
+      - ".github/workflows/ai-xray-dl-tests.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test-dl:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install CPU PyTorch and test deps
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --index-url https://download.pytorch.org/whl/cpu torch
+          python -m pip install "numpy>=1.26,<3" "opencv-python-headless>=4.8,<5" "pytest>=8,<10"
+      - name: Test neural network and data pipeline
+        run: |
+          python -m compileall -q ai-xray-desktop/dl
+          python -m pytest ai-xray-desktop/dl/tests -q
