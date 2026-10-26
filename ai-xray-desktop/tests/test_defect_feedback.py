@@ -29,3 +29,22 @@ def test_invalid_ng_and_grouped_validation(tmp_path):
     tr,va,labels,holdout=split_review_samples(tmp_path)
     assert len(tr)==4 and len(va)==4
     assert {p.parent.name for p,_ in tr}.isdisjoint({p.parent.name for p,_ in va})
+
+def test_train_predict_after_two_volumes(tmp_path):
+    torch=pytest.importorskip("torch")
+    from defect_feedback import train_feedback,load_feedback,predict_feedback
+    for vi,vol in enumerate(("boardA","boardB")):
+        for i,label in enumerate(("OK","VOID","OK","VOID")):
+            image=np.zeros((3,72,72),np.float32)
+            if label=="VOID":
+                image[:,28:44,28:44]=.95
+            else:
+                image[:,:,:]=.22
+            save_feedback(tmp_path,vol,f"B{i}",i,(36,36),image,
+                 "OK" if label=="OK" else "NG",label,"reviewer")
+    path,state=train_feedback(tmp_path,epochs=1)
+    assert path.exists() and state["validation_count"]==4
+    model,checkpoint=load_feedback(path)
+    sample=np.zeros((3,64,64),np.float32)
+    pred=predict_feedback(model,checkpoint,sample)
+    assert pred["suggestion"] in ("OK","VOID") and pred["status"] in ("REVIEW","HUMAN_CONFIRM_REQUIRED")
