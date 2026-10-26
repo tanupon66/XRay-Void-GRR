@@ -155,8 +155,9 @@ def export(folder,rows,overlay,source):
 
 class App(tk.Tk):
     def __init__(self):
-        super().__init__();self.title("AI X-ray Inspection v0.2 - EXPERIMENTAL");self.geometry("1100x750")
+        super().__init__();self.title("AI X-ray Inspection - Research Viewer");self.geometry("1100x750")
         self.vol=None;self.files=[];self.z=0;self.rows=[];self.overlay=None;self.photo=None
+        self.zoom=1.;self.panx=0;self.pany=0;self.pan_origin=None
         self.index=tk.DoubleVar(value=0);self.pol=tk.StringVar(value="bright")
         self.peers=tk.StringVar(value="10");self.pixel=tk.StringVar(value="")
         self.status=tk.StringVar(value="Open an image, CT folder, or verified RAW VGI+REC2")
@@ -175,9 +176,17 @@ class App(tk.Tk):
         self.slide=ttk.Scale(bar,variable=self.index,from_=0,to=0,command=self.slide_to)
         self.slide.pack(side="left",fill="x",expand=True,padx=8)
         self.slice_label=ttk.Label(bar,text="0/0");self.slice_label.pack(side="left")
+        ttk.Button(bar,text="Zoom +",command=lambda:self.zoom_by(1.25)).pack(side="left")
+        ttk.Button(bar,text="Zoom -",command=lambda:self.zoom_by(.8)).pack(side="left")
+        ttk.Button(bar,text="Fit",command=self.fit_view).pack(side="left")
         self.canvas=tk.Canvas(self,bg="#20252d",highlightthickness=0)
         self.canvas.pack(fill="both",expand=True,padx=8,pady=4)
         self.canvas.bind("<Configure>",lambda event:self.draw())
+        self.canvas.bind("<MouseWheel>",lambda e:self.zoom_by(1.2 if e.delta>0 else 1/1.2))
+        self.canvas.bind("<Button-4>",lambda e:self.zoom_by(1.2))
+        self.canvas.bind("<Button-5>",lambda e:self.zoom_by(1/1.2))
+        self.canvas.bind("<ButtonPress-3>",self.start_pan)
+        self.canvas.bind("<B3-Motion>",self.move_pan)
         keys=("pin","void_pct","area_px","area_delta_pct","circularity","flag","reason")
         self.table=ttk.Treeview(self,columns=keys,show="headings",height=8)
         for key in keys:
@@ -250,14 +259,24 @@ class App(tk.Tk):
             self.status.set("2D slice preview - EXPERIMENTAL, NOT VALIDATED")
             self.draw()
         except Exception as exc:messagebox.showerror("Read image failed",str(exc))
+    def zoom_by(self,factor):
+        self.zoom=max(.5,min(20.,self.zoom*factor));self.draw()
+    def fit_view(self):
+        self.zoom=1.;self.panx=0;self.pany=0;self.draw()
+    def start_pan(self,event):
+        self.pan_origin=(event.x,event.y,self.panx,self.pany)
+    def move_pan(self,event):
+        if self.pan_origin is None:return
+        x,y,px,py=self.pan_origin
+        self.panx=px+event.x-x;self.pany=py+event.y-y;self.draw()
     def draw(self):
         if self.overlay is None:return
         cw,ch=self.canvas.winfo_width(),self.canvas.winfo_height()
         if cw<10 or ch<10:return
-        h,w=self.overlay.shape[:2];scale=min(cw/w,ch/h)
+        h,w=self.overlay.shape[:2];scale=min(cw/w,ch/h)*self.zoom
         view=cv2.resize(self.overlay,(max(1,int(w*scale)),max(1,int(h*scale))))
         self.photo=ImageTk.PhotoImage(Image.fromarray(cv2.cvtColor(view,cv2.COLOR_BGR2RGB)))
-        self.canvas.delete("all");self.canvas.create_image(cw//2,ch//2,image=self.photo)
+        self.canvas.delete("all");self.canvas.create_image(cw//2+self.panx,ch//2+self.pany,image=self.photo)
     def run(self):
         if not self.total():return
         try:

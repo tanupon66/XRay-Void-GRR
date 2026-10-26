@@ -45,7 +45,7 @@ class Studio(tk.Toplevel):
         self.ball_id=tk.StringVar(value="1");self.reviewer=tk.StringVar(value="Engineer")
         self.defect=tk.StringVar(value="NONE");self.review_comment=tk.StringVar(value="")
         self.review_mode=tk.BooleanVar(value=True)
-        self.selected_yx=None
+        self.selected_yx=None;self.selected_source=None
         self.mask_verified=tk.BooleanVar(value=False)
         self.defect_model=None;self.defect_checkpoint=None
         self.ai_suggestion="NOT_TRAINED";self.ai_confidence=None
@@ -138,6 +138,8 @@ class Studio(tk.Toplevel):
         try:
             from defect_feedback import save_feedback
             if self.selected_yx is None:raise ValueError("Select Ball on the image first")
+            if self.selected_source != str(self.parent.files[0]):
+                raise ValueError("Source volume changed. Select Ball again before confirmation.")
             defect=self.defect.get()
             if verdict=="OK":
                 if defect not in ("OK","NONE"):raise ValueError("Set Defect to NONE or OK before Confirm OK")
@@ -162,6 +164,7 @@ class Studio(tk.Toplevel):
         else:
             self.ball_id.set(f"XY_{y}_{x}")
         self.selected_yx=(y,x)
+        self.selected_source=str(self.parent.files[0])
         self.ai_suggestion="NOT_PREDICTED";self.ai_confidence=None
         self.status.set(f"Ball {self.ball_id.get()} selected at Y={y} X={x}; use AI Suggest, correct Defect, Confirm OK/NG")
         self.refresh()
