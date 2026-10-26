@@ -155,11 +155,24 @@ class Studio(tk.Toplevel):
             self.pred=result
             from measurement3d import measure_3d,volume_summary
             rows=measure_3d(result,(30,30,30),peers=10)
+            from geometry_screen import measure_ball_projection, peer_screen
+            projection=[]
+            for record in rows:
+                # Estimate the measurement ROI from predicted component footprint.
+                # This ROI is NOT a calibrated CAD reference for true coverage.
+                r=max(3.,float(np.sqrt(max(record["projected_area_mm2"],0.)*1e6/900./np.pi))*1.35)
+                item=measure_ball_projection(result,(record["y"],record["x"]),r)
+                item["object_id"]=record["id"]
+                projection.append(item)
+            projection=peer_screen(projection,k=10) if projection else []
             summary=volume_summary(result,(30,30,30))
             out=Path(self.dataset.get())/"results";out.mkdir(parents=True,exist_ok=True)
             np.savez_compressed(out/"labels3d.npz",labels=result)
             with (out/"objects3d.csv").open("w",newline="") as f:
                 writer=csv.DictWriter(f,list(rows[0]) if rows else ["id"]);writer.writeheader();writer.writerows(rows)
-            (out/"summary.json").write_text(json.dumps({"objects":len(rows),"assumed_voxel_um":30,"overall":summary,"warning":"Research only: touching balls can merge; false joins and mislabeled voids possible"}))
+            if projection:
+                with (out/"ball_geometry.csv").open("w",newline="",encoding="utf-8-sig") as f:
+                    writer=csv.DictWriter(f,list(projection[0]));writer.writeheader();writer.writerows(projection)
+            (out/"summary.json").write_text(json.dumps({"objects":len(rows),"assumed_voxel_um":30,"overall":summary,"warning":"Research only. ROI derived from predicted object: coverage is relative to an inferred circular window, NOT true CAD coverage. Touching balls can merge; false joins and mislabeled voids possible"}))
             self.after(0,lambda:self.status.set(f"Saved {len(rows)} candidate 3D objects to {out}"))
         self.worker(work)
