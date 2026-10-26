@@ -3,7 +3,6 @@ on:
   push:
     branches: [main]
     paths:
-      - "ai-xray-desktop/**"
       - ".github/workflows/ai-xray-windows.yml"
   workflow_dispatch:
 

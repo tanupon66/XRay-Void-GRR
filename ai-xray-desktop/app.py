@@ -208,12 +208,25 @@ class App(tk.Tk):
             sel=filedialog.askopenfilename(title="Choose paired REC2",filetypes=[("REC2","*.rec2")])
             if not sel:return
             rec=Path(sel)
-        order=simpledialog.askstring("Byte order","Enter little or big if metadata does not define it.\nLeave blank to use metadata. Verify in original viewer.",parent=self)
-        if order is None:return
         try:
-            vol=read_volume(vgi,rec,order.strip() or None)
+            # PNG-stacked REC2 determines byte order through its own format.
+            # Strict RAW requires byte order only if VGI doesn't define one.
+            with open(rec,"rb") as stream:
+                magic=stream.read(16)
+            is_png=magic.startswith(b"\x00\x00\x00\x0dIHDR") or magic.startswith(b"\x89PNG\\r\\n\x1a\\n")
+            order=None
+            if not is_png:
+                info=vgi_sections(vgi).get("file1",{})
+                specified=info.get("byteorder") or info.get("endian") or info.get("endianness")
+                if not specified:
+                    order=simpledialog.askstring("RAW byte order only","Unknown RAW byte order. Enter little or big (verify with CT viewer):",parent=self)
+                    if order is None:return
+                    order=order.strip().lower()
+                    if order not in ("little","big"):
+                        raise ValueError("RAW byte order must be little or big")
+            vol=read_volume(vgi,rec,order)
             self.vol=vol;self.files=[rec];self.reset()
-            messagebox.showwarning("Research format only","Supports verified stacked PNG or strict RAW.\nConfirm orientation against Omron Viewer. No trained AI or 3D segmentation.")
+            self.status.set(f"Loaded {vol.shape[0]} CT slices; confirm orientation against original viewer")
         except Exception as exc:messagebox.showerror("Volume import blocked",str(exc))
     def open_studio(self):
         from studio import Studio
