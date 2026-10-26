@@ -162,7 +162,7 @@ class App(tk.Tk):
         self.status=tk.StringVar(value="Open an image, CT folder, or verified RAW VGI+REC2")
         top=ttk.Frame(self,padding=8);top.pack(fill="x")
         for title,callback in (("Open image",self.load_image),("CT folder",self.load_folder),
-            ("VGI + REC2",self.load_volume),("Cross-section",self.cross_section),("Analyze",self.run),("Export",self.save)):
+            ("VGI + REC2",self.load_volume),("Cross-section",self.cross_section),("AI Studio",self.open_studio),("Analyze",self.run),("Export",self.save)):
             ttk.Button(top,text=title,command=callback).pack(side="left",padx=3)
         ttk.Label(top,text="Solder polarity").pack(side="left",padx=6)
         ttk.Combobox(top,textvariable=self.pol,values=["bright","dark"],width=7,state="readonly").pack(side="left")
@@ -215,6 +215,9 @@ class App(tk.Tk):
             self.vol=vol;self.files=[rec];self.reset()
             messagebox.showwarning("Research format only","Supports verified stacked PNG or strict RAW.\nConfirm orientation against Omron Viewer. No trained AI or 3D segmentation.")
         except Exception as exc:messagebox.showerror("Volume import blocked",str(exc))
+    def open_studio(self):
+        from studio import Studio
+        Studio(self)
     def cross_section(self):
         if self.vol is None:
             messagebox.showinfo("Open Volume first","Load a supported VGI+REC2 volume before opening orthogonal viewer")
