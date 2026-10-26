@@ -53,11 +53,10 @@ def vgi_sections(path):
 def read_volume(vgi,rec,bo=None):
     from rec2_png import open_png_stacked
     from pathlib import Path
-    try:
+    with open(rec,"rb") as payload:
+        signature=payload.read(16)
+    if signature.startswith(b"\x00\x00\x00\x0dIHDR") or signature.startswith(b"\x89PNG\r\n\x1a\n"):
         return open_png_stacked(vgi,rec,vgi_sections(vgi))
-    except ValueError as ex:
-        if "Unsupported REC2 PNG variant" not in str(ex):
-            raise
     return read_volume_raw(vgi,rec,bo)
 
 def read_volume_raw(vgi,rec,bo=None):
