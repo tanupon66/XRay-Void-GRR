@@ -213,7 +213,7 @@ class App(tk.Tk):
             # Strict RAW requires byte order only if VGI doesn't define one.
             with open(rec,"rb") as stream:
                 magic=stream.read(16)
-            is_png=magic.startswith(b"\x00\x00\x00\x0dIHDR") or magic.startswith(b"\x89PNG\\r\\n\x1a\\n")
+            is_png=magic.startswith(b"\x00\x00\x00\x0dIHDR") or magic.startswith(b"\x89PNG\r\n\x1a\n")
             order=None
             if not is_png:
                 info=vgi_sections(vgi).get("file1",{})
