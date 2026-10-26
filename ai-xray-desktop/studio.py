@@ -165,6 +165,8 @@ class Studio(tk.Toplevel):
                 item["object_id"]=record["id"]
                 projection.append(item)
             projection=peer_screen(projection,k=10) if projection else []
+            from instance3d import analyze_instances
+            instances=analyze_instances(result,spacing_zyx_um=(30,30,30),radius_px=9)
             summary=volume_summary(result,(30,30,30))
             out=Path(self.dataset.get())/"results";out.mkdir(parents=True,exist_ok=True)
             np.savez_compressed(out/"labels3d.npz",labels=result)
@@ -173,6 +175,12 @@ class Studio(tk.Toplevel):
             if projection:
                 with (out/"ball_geometry.csv").open("w",newline="",encoding="utf-8-sig") as f:
                     writer=csv.DictWriter(f,list(projection[0]));writer.writeheader();writer.writerows(projection)
+            for name,key in (("balls3d.csv","balls"),("bridge_candidates.csv","bridges"),("missing_candidates.csv","missing"),("void_components3d.csv","voids")):
+                data=instances[key]
+                if data:
+                    with (out/name).open("w",newline="",encoding="utf-8-sig") as f:
+                        wr=csv.DictWriter(f,fieldnames=list(data[0]));wr.writeheader();wr.writerows(data)
+            np.savez_compressed(out/"instance_labels3d.npz",labels=instances["instance_labels"])
             (out/"summary.json").write_text(json.dumps({"objects":len(rows),"assumed_voxel_um":30,"overall":summary,"warning":"Research only. ROI derived from predicted object: coverage is relative to an inferred circular window, NOT true CAD coverage. Touching balls can merge; false joins and mislabeled voids possible"}))
             self.after(0,lambda:self.status.set(f"Saved {len(rows)} candidate 3D objects to {out}"))
         self.worker(work)
