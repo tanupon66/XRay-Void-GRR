@@ -37,6 +37,11 @@ class Studio(tk.Toplevel):
         self.expected_centers=None
         self.cls=tk.IntVar(value=1)
         self.epochs=tk.IntVar(value=10)
+        self.zoom=1.0;self.panx=0;self.pany=0;self.drag_origin=None
+        self.edge_tolerance=tk.IntVar(value=20)
+        self.auto_mode=tk.BooleanVar(value=True)
+        self.ball_id=tk.StringVar(value="1");self.reviewer=tk.StringVar(value="Engineer")
+        self.defect=tk.StringVar(value="NONE");self.review_comment=tk.StringVar(value="")
         bar=ttk.Frame(self);bar.pack(fill="x")
         for title,fn in [("Save Label",self.save_label),("Train Model",self.train),("Load Model",self.load_model),("Predict Slice",self.predict_slice),("Load Ball Centers CSV",self.load_centers),("Analyze 3D",self.analyze3d)]:
             ttk.Button(bar,text=title,command=fn).pack(side="left",padx=3,pady=5)
@@ -46,11 +51,32 @@ class Studio(tk.Toplevel):
             ttk.Entry(options,textvariable=var,width=width).pack(side="left",padx=5)
         for title,value in [("Background",0),("Solder",1),("Void",2)]:
             ttk.Radiobutton(options,text=title,variable=self.cls,value=value).pack(side="left")
+        review=ttk.Frame(self);review.pack(fill="x",padx=6)
+        ttk.Label(review,text="Ball ID").pack(side="left");ttk.Entry(review,textvariable=self.ball_id,width=7).pack(side="left")
+        ttk.Label(review,text="Defect").pack(side="left")
+        ttk.Combobox(review,textvariable=self.defect,values=["NONE","VOID","INSUFFICIENT_SOLDER","MISSING_BALL","SOLDER_BRIDGE","SHAPE","OTHER"],width=20,state="readonly").pack(side="left")
+        ttk.Entry(review,textvariable=self.reviewer,width=14).pack(side="left")
+        ttk.Entry(review,textvariable=self.review_comment,width=24).pack(side="left")
+        ttk.Button(review,text="Confirm OK",command=lambda:self.confirm("OK")).pack(side="left")
+        ttk.Button(review,text="Confirm NG",command=lambda:self.confirm("NG")).pack(side="left")
+        zoom=ttk.Frame(self);zoom.pack(fill="x",padx=6)
+        ttk.Checkbutton(zoom,text="Auto Edge on click",variable=self.auto_mode).pack(side="left")
+        ttk.Label(zoom,text="Edge tolerance").pack(side="left")
+        ttk.Scale(zoom,from_=2,to=60,variable=self.edge_tolerance).pack(side="left")
+        ttk.Button(zoom,text="Zoom +",command=lambda:self.adjust_zoom(1.3)).pack(side="left")
+        ttk.Button(zoom,text="Zoom -",command=lambda:self.adjust_zoom(1/1.3)).pack(side="left")
+        ttk.Button(zoom,text="Fit",command=self.fit).pack(side="left")
+        ttk.Label(zoom,text="Wheel zoom | Right-drag pan | Auto edge: click region").pack(side="left")
         self.canvas=tk.Canvas(self,bg="#20242b")
         self.canvas.pack(fill="both",expand=True,padx=8,pady=5)
         self.canvas.bind("<Configure>",lambda _:self.refresh())
         self.canvas.bind("<B1-Motion>",self.paint)
         self.canvas.bind("<Button-1>",self.paint)
+        self.canvas.bind("<MouseWheel>",lambda e:self.adjust_zoom(1.2 if e.delta>0 else 1/1.2))
+        self.canvas.bind("<Button-4>",lambda e:self.adjust_zoom(1.2))
+        self.canvas.bind("<Button-5>",lambda e:self.adjust_zoom(1/1.2))
+        self.canvas.bind("<ButtonPress-3>",self.pan_start)
+        self.canvas.bind("<B3-Motion>",self.pan_move)
         ttk.Label(self,textvariable=self.status).pack(fill="x")
         ttk.Label(self,text="Experimental: predicted labels and 3D values are NOT manufacturing quality decisions").pack()
         self.after(100,self.refresh)
@@ -69,19 +95,47 @@ class Studio(tk.Toplevel):
                 for v,color in [(1,(40,240,75)),(2,(240,60,50))]:
                     p=m==v;rgb[p]=(rgb[p]*.5+np.array(color)*.5).astype(np.uint8)
             cw,ch=self.canvas.winfo_width(),self.canvas.winfo_height()
-            self.scale=min(cw/im.shape[1],ch/im.shape[0])
+            self.scale=min(cw/im.shape[1],ch/im.shape[0])*self.zoom
             self.photo=ImageTk.PhotoImage(Image.fromarray(rgb).resize((max(1,int(im.shape[1]*self.scale)),max(1,int(im.shape[0]*self.scale)))))
-            self.ox=(cw-self.photo.width())//2;self.oy=(ch-self.photo.height())//2
+            self.ox=(cw-self.photo.width())//2+self.panx;self.oy=(ch-self.photo.height())//2+self.pany
             self.canvas.delete("all");self.canvas.create_image(self.ox,self.oy,anchor="nw",image=self.photo)
         except Exception:pass
+    def adjust_zoom(self,factor):
+        self.zoom=max(.5,min(16.,self.zoom*factor));self.refresh()
+    def fit(self):
+        self.zoom=1.;self.panx=0;self.pany=0;self.refresh()
+    def pan_start(self,event):
+        self.drag_origin=(event.x,event.y,self.panx,self.pany)
+    def pan_move(self,event):
+        if self.drag_origin:
+            x,y,px,py=self.drag_origin
+            self.panx=px+event.x-x;self.pany=py+event.y-y;self.refresh()
+    def confirm(self,verdict):
+        try:
+            from review_log import append_review
+            if not self.parent.total():raise ValueError("Open CT first")
+            if verdict=="NG" and self.defect.get()=="NONE":raise ValueError("Select NG defect type")
+            item=append_review(Path(self.dataset.get())/"reviews.csv",
+                {"volume_id":self.volume_id.get(),"slice_z":self.parent.z,
+                 "ball_id":self.ball_id.get(),"verdict":verdict,
+                 "defect":self.defect.get(),"reviewer":self.reviewer.get(),
+                 "comment":self.review_comment.get(),"model_file":"local_unverified"})
+            self.status.set(f"Saved {verdict} for ball {item['ball_id']} to reviews.csv (no automatic training)")
+        except Exception as e:messagebox.showerror("Review not saved",str(e))
     def paint(self,event):
         try:
             x=int((event.x-self.ox)/self.scale);y=int((event.y-self.oy)/self.scale)
             m=self.mask()
             if 0<=x<m.shape[1] and 0<=y<m.shape[0]:
-                cv2.circle(m,(x,y),4,int(self.cls.get()),-1)
+                if self.auto_mode.get():
+                    from autolabel import auto_region
+                    region=auto_region(self.get_image(),(x,y),int(self.edge_tolerance.get()))
+                    m[region]=int(self.cls.get())
+                    self.status.set(f"Auto Edge proposed {int(region.sum())} px; inspect before Save Label")
+                else:
+                    cv2.circle(m,(x,y),max(1,round(4/self.zoom)),int(self.cls.get()),-1)
                 self.refresh()
-        except Exception:pass
+        except Exception as e:self.status.set(str(e))
     def save_label(self):
         try:
             z=self.parent.z;vol=self.parent.vol
