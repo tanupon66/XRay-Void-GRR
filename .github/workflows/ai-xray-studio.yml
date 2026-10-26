@@ -1,0 +1,66 @@
+name: Build AI X-ray DL Studio EXE
+on:
+  push:
+    branches: [main]
+    paths:
+      - "ai-xray-desktop/**"
+      - ".github/workflows/ai-xray-studio.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          python -m pip install -r ai-xray-desktop/requirements.txt
+          python -m pip install --index-url https://download.pytorch.org/whl/cpu torch
+          python -m pip install pytest pyinstaller
+      - name: Validate
+        shell: pwsh
+        run: |
+          python -m py_compile ai-xray-desktop/studio.py ai-xray-desktop/app.py
+          python -m pytest ai-xray-desktop/tests ai-xray-desktop/dl/tests -q
+      - name: Build full PyTorch application
+        shell: pwsh
+        run: |
+          python -m PyInstaller --noconfirm --clean --onefile --windowed --name AI-Xray-DL-Studio --paths ai-xray-desktop --collect-all torch --hidden-import dl.model --hidden-import dl.train --distpath dist --workpath build_studio --specpath build_studio ai-xray-desktop/app.py
+          if (!(Test-Path 'dist/AI-Xray-DL-Studio.exe')) { throw 'Missing EXE' }
+      - name: Smoke test
+        shell: pwsh
+        run: |
+          $p=Start-Process -FilePath 'dist/AI-Xray-DL-Studio.exe' -PassThru
+          Start-Sleep -Seconds 30
+          $p.Refresh()
+          if ($p.HasExited) { throw "EXE exited: $($p.ExitCode)" }
+          Stop-Process -Id $p.Id -Force
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AI-Xray-DL-Studio-Windows-x64
+          path: dist/AI-Xray-DL-Studio.exe
+          retention-days: 30
+          if-no-files-found: error
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: AI-Xray-DL-Studio-Windows-x64
+          path: release
+      - name: Publish experimental release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN: ${{ github.run_number }}
+        run: |
+          gh release create "ai-xray-dl-v0.7-${RUN}" release/AI-Xray-DL-Studio.exe --repo "$REPO" --prerelease --title "AI X-ray DL Studio v0.7 preview ${RUN}" --notes "Experimental v0.5 Labeling + v0.6 2.5D U-Net training/prediction + v0.7 CT-stack voxel analysis. NOT validated, NO pre-trained weights, must provide masks."
