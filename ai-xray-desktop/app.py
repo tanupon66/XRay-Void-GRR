@@ -51,6 +51,16 @@ def vgi_sections(path):
     return sec
 
 def read_volume(vgi,rec,bo=None):
+    from rec2_png import open_png_stacked
+    from pathlib import Path
+    try:
+        return open_png_stacked(vgi,rec,vgi_sections(vgi))
+    except ValueError as ex:
+        if "Unsupported REC2 PNG variant" not in str(ex):
+            raise
+    return read_volume_raw(vgi,rec,bo)
+
+def read_volume_raw(vgi,rec,bo=None):
     vgi=Path(vgi);rec=Path(rec)
     if not vgi.is_file() or not rec.is_file() or vgi.suffix.lower()!=".vgi" or rec.suffix.lower()!=".rec2":
         raise ValueError("Need matching .vgi + .rec2 pair")
@@ -153,7 +163,7 @@ class App(tk.Tk):
         self.status=tk.StringVar(value="Open an image, CT folder, or verified RAW VGI+REC2")
         top=ttk.Frame(self,padding=8);top.pack(fill="x")
         for title,callback in (("Open image",self.load_image),("CT folder",self.load_folder),
-            ("VGI + REC2",self.load_volume),("Analyze",self.run),("Export",self.save)):
+            ("VGI + REC2",self.load_volume),("Cross-section",self.cross_section),("Analyze",self.run),("Export",self.save)):
             ttk.Button(top,text=title,command=callback).pack(side="left",padx=3)
         ttk.Label(top,text="Solder polarity").pack(side="left",padx=6)
         ttk.Combobox(top,textvariable=self.pol,values=["bright","dark"],width=7,state="readonly").pack(side="left")
@@ -204,8 +214,14 @@ class App(tk.Tk):
         try:
             vol=read_volume(vgi,rec,order.strip() or None)
             self.vol=vol;self.files=[rec];self.reset()
-            messagebox.showwarning("Research format only","Only a verified RAW layout is accepted.\nNo proprietary REC2 decoding, no true 3D measurements.")
+            messagebox.showwarning("Research format only","Supports verified stacked PNG or strict RAW.\nConfirm orientation against Omron Viewer. No trained AI or 3D segmentation.")
         except Exception as exc:messagebox.showerror("Volume import blocked",str(exc))
+    def cross_section(self):
+        if self.vol is None:
+            messagebox.showinfo("Open Volume first","Load a supported VGI+REC2 volume before opening orthogonal viewer")
+            return
+        from volume_viewer import VolumeExplorer
+        VolumeExplorer(self,self.vol)
     def slide_to(self,*_):
         if self.total():
             z=max(0,min(self.total()-1,round(self.index.get())))
