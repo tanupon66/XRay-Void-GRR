@@ -235,9 +235,19 @@ class Studio(tk.Toplevel):
             self.mask_verified.set(False)
         except Exception as e:messagebox.showerror("Save label",str(e))
     def worker(self,fn):
+        if getattr(self,"busy",False):
+            self.status.set("Training or prediction already running")
+            return
+        self.busy=True
         def run():
-            try:fn()
-            except Exception as e:self.after(0,lambda:self.status.set("Error: "+str(e)))
+            try:
+                fn()
+            except Exception as e:
+                # Capture exception text NOW; Python clears 'e' after except.
+                err=str(e)
+                self.after(0,lambda message=err:self.status.set("Error: "+message))
+            finally:
+                self.after(0,lambda:setattr(self,"busy",False))
         Thread(target=run,daemon=True).start()
     def train(self):
         def work():
