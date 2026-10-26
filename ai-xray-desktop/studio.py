@@ -34,10 +34,11 @@ class Studio(tk.Toplevel):
         self.dataset=tk.StringVar(value=str(Path.home()/"AI-Xray-Dataset"))
         self.volume_id=tk.StringVar(value="volume_001")
         self.status=tk.StringVar(value="Open volume in main viewer, then label solder/void")
+        self.expected_centers=None
         self.cls=tk.IntVar(value=1)
         self.epochs=tk.IntVar(value=10)
         bar=ttk.Frame(self);bar.pack(fill="x")
-        for title,fn in [("Save Label",self.save_label),("Train Model",self.train),("Load Model",self.load_model),("Predict Slice",self.predict_slice),("Analyze 3D",self.analyze3d)]:
+        for title,fn in [("Save Label",self.save_label),("Train Model",self.train),("Load Model",self.load_model),("Predict Slice",self.predict_slice),("Load Ball Centers CSV",self.load_centers),("Analyze 3D",self.analyze3d)]:
             ttk.Button(bar,text=title,command=fn).pack(side="left",padx=3,pady=5)
         options=ttk.Frame(self);options.pack(fill="x")
         for title,var,width in [("Dataset",self.dataset,32),("Volume ID",self.volume_id,14),("Epochs",self.epochs,5)]:
@@ -142,6 +143,18 @@ class Studio(tk.Toplevel):
             self.after(0,self.refresh)
             self.after(0,lambda:self.status.set("Predicted slice, mean confidence %.3f; review mask manually"%conf.mean()))
         self.worker(work)
+    def load_centers(self):
+        p=filedialog.askopenfilename(filetypes=[("CSV","*.csv")])
+        if not p:return
+        try:
+            centers=[]
+            with open(p,newline="",encoding="utf-8-sig") as f:
+                for row in csv.DictReader(f):
+                    centers.append((float(row["y"]),float(row["x"])))
+            if not centers:raise ValueError("CSV has no ball coordinates")
+            self.expected_centers=centers
+            self.status.set(f"Loaded {len(centers)} expected ball positions (Y,X pixel coords)")
+        except Exception as e:messagebox.showerror("Invalid centers CSV","Use columns y,x (pixels). "+str(e))
     def analyze3d(self):
         if self.model is None or self.parent.vol is None:
             messagebox.showwarning("Requires volume and model","Open VGI+REC2 and load trained model");return
@@ -166,7 +179,7 @@ class Studio(tk.Toplevel):
                 projection.append(item)
             projection=peer_screen(projection,k=10) if projection else []
             from instance3d import analyze_instances
-            instances=analyze_instances(result,spacing_zyx_um=(30,30,30),radius_px=9)
+            instances=analyze_instances(result,centers_yx=self.expected_centers,spacing_zyx_um=(30,30,30),radius_px=9)
             summary=volume_summary(result,(30,30,30))
             out=Path(self.dataset.get())/"results";out.mkdir(parents=True,exist_ok=True)
             np.savez_compressed(out/"labels3d.npz",labels=result)
