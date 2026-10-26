@@ -42,7 +42,7 @@ def vgi_sections(path):
         if not line or line.startswith(("#",";")):continue
         if line.startswith("{") and line.endswith("}"):
             vol=line[1:-1].lower()
-            if vol.startswith("volume") and vol!="volume1":raise ValueError("Multi-volume files unsupported")
+            if re.fullmatch(r"volume[0-9]+",vol) and vol!="volume1":raise ValueError("Multi-volume files unsupported")
             part="header"
         elif line.startswith("[") and line.endswith("]"):
             part=line[1:-1].lower();sec.setdefault(part,{})
