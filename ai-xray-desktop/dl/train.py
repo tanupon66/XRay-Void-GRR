@@ -5,7 +5,10 @@ from pathlib import Path
 import numpy as np
 import torch
 from torch.utils.data import Dataset,DataLoader
-from model import UNet25D,predict
+try:
+    from .model import UNet25D,predict
+except ImportError:
+    from model import UNet25D,predict
 
 class Data(Dataset):
     def __init__(self,files):self.files=list(files)

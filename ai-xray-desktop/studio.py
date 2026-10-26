@@ -2,7 +2,7 @@ import tkinter as tk
 from tkinter import filedialog,ttk,messagebox
 from pathlib import Path
 from threading import Thread
-import csv,json
+import csv,json,re
 import numpy as np
 import cv2
 from PIL import Image,ImageTk
@@ -28,11 +28,13 @@ class Studio(tk.Toplevel):
     def __init__(self,parent):
         super().__init__(parent)
         self.parent=parent
-        self.title("AI X-ray Studio v0.7 - RESEARCH ONLY")
+        self.title("AI X-ray Studio - Defect Feedback / Mask Training (Research)")
         self.geometry("1020x730")
         self.model=None;self.masks={};self.pred=None;self.photo=None
         self.dataset=tk.StringVar(value=str(Path.home()/"AI-Xray-Dataset"))
-        self.volume_id=tk.StringVar(value="volume_001")
+        loaded_name=self.parent.files[0].stem if getattr(self.parent,"files",None) else "unnamed_volume"
+        loaded_name=re.sub(r"[^A-Za-z0-9_.-]+","_",loaded_name).strip("._")[:90] or "unnamed_volume"
+        self.volume_id=tk.StringVar(value=loaded_name)
         self.status=tk.StringVar(value="Open volume in main viewer, then label solder/void")
         self.expected_centers=None
         self.cls=tk.IntVar(value=1)
@@ -42,6 +44,11 @@ class Studio(tk.Toplevel):
         self.auto_mode=tk.BooleanVar(value=True)
         self.ball_id=tk.StringVar(value="1");self.reviewer=tk.StringVar(value="Engineer")
         self.defect=tk.StringVar(value="NONE");self.review_comment=tk.StringVar(value="")
+        self.review_mode=tk.BooleanVar(value=True)
+        self.selected_yx=None
+        self.mask_verified=tk.BooleanVar(value=False)
+        self.defect_model=None;self.defect_checkpoint=None
+        self.ai_suggestion="NOT_TRAINED";self.ai_confidence=None
         bar=ttk.Frame(self);bar.pack(fill="x")
         for title,fn in [("Save Label",self.save_label),("Train Model",self.train),("Load Model",self.load_model),("Predict Slice",self.predict_slice),("Load Ball Centers CSV",self.load_centers),("Analyze 3D",self.analyze3d)]:
             ttk.Button(bar,text=title,command=fn).pack(side="left",padx=3,pady=5)
@@ -59,6 +66,12 @@ class Studio(tk.Toplevel):
         ttk.Entry(review,textvariable=self.review_comment,width=24).pack(side="left")
         ttk.Button(review,text="Confirm OK",command=lambda:self.confirm("OK")).pack(side="left")
         ttk.Button(review,text="Confirm NG",command=lambda:self.confirm("NG")).pack(side="left")
+        feedback=ttk.Frame(self);feedback.pack(fill="x",padx=6)
+        ttk.Checkbutton(feedback,text="1) Select Ball (click image)",variable=self.review_mode).pack(side="left",padx=3)
+        ttk.Button(feedback,text="2) AI Suggest Defect",command=self.predict_defect).pack(side="left",padx=3)
+        ttk.Button(feedback,text="3) Train on Confirmed Examples",command=self.train_defect).pack(side="left",padx=3)
+        ttk.Button(feedback,text="Load Defect Model",command=self.load_defect_model).pack(side="left",padx=3)
+        ttk.Checkbutton(feedback,text="Verified full mask",variable=self.mask_verified).pack(side="left",padx=3)
         zoom=ttk.Frame(self);zoom.pack(fill="x",padx=6)
         ttk.Checkbutton(zoom,text="Auto Edge on click",variable=self.auto_mode).pack(side="left")
         ttk.Label(zoom,text="Edge tolerance").pack(side="left")
@@ -99,6 +112,12 @@ class Studio(tk.Toplevel):
             self.photo=ImageTk.PhotoImage(Image.fromarray(rgb).resize((max(1,int(im.shape[1]*self.scale)),max(1,int(im.shape[0]*self.scale)))))
             self.ox=(cw-self.photo.width())//2+self.panx;self.oy=(ch-self.photo.height())//2+self.pany
             self.canvas.delete("all");self.canvas.create_image(self.ox,self.oy,anchor="nw",image=self.photo)
+            if self.selected_yx is not None:
+                cy,cx=self.selected_yx
+                px=self.ox+(cx+.5)*self.scale;py=self.oy+(cy+.5)*self.scale
+                self.canvas.create_oval(px-9,py-9,px+9,py+9,outline="#ffdc55",width=2)
+                self.canvas.create_line(px-14,py,px+14,py,fill="#ffdc55")
+                self.canvas.create_line(px,py-14,px,py+14,fill="#ffdc55")
         except Exception:pass
     def adjust_zoom(self,factor):
         self.zoom=max(.5,min(16.,self.zoom*factor));self.refresh()
@@ -110,23 +129,84 @@ class Studio(tk.Toplevel):
         if self.drag_origin:
             x,y,px,py=self.drag_origin
             self.panx=px+event.x-x;self.pany=py+event.y-y;self.refresh()
+    def review_stack(self):
+        vol=self.parent.vol
+        if vol is not None:return stack3(vol,self.parent.z)
+        im=self.get_image().astype(np.float32)/255.
+        return np.stack([im,im,im])
     def confirm(self,verdict):
         try:
-            from review_log import append_review
-            if not self.parent.total():raise ValueError("Open CT first")
-            if verdict=="NG" and self.defect.get()=="NONE":raise ValueError("Select NG defect type")
-            item=append_review(Path(self.dataset.get())/"reviews.csv",
-                {"volume_id":self.volume_id.get(),"slice_z":self.parent.z,
-                 "ball_id":self.ball_id.get(),"verdict":verdict,
-                 "defect":self.defect.get(),"reviewer":self.reviewer.get(),
-                 "comment":self.review_comment.get(),"model_file":"local_unverified"})
-            self.status.set(f"Saved {verdict} for ball {item['ball_id']} to reviews.csv (no automatic training)")
+            from defect_feedback import save_feedback
+            if self.selected_yx is None:raise ValueError("Select Ball on the image first")
+            defect=self.defect.get()
+            if verdict=="OK":
+                if defect not in ("OK","NONE"):raise ValueError("Set Defect to NONE or OK before Confirm OK")
+                defect="OK"
+            else:
+                if defect in ("NONE","OK"):raise ValueError("Choose the correct NG defect first")
+            entry=save_feedback(self.dataset.get(),self.volume_id.get(),self.ball_id.get(),
+                self.parent.z,self.selected_yx,self.review_stack(),verdict,defect,
+                self.reviewer.get(),self.review_comment.get(),
+                suggestion=self.ai_suggestion,confidence=self.ai_confidence)
+            self.status.set(f"Confirmed {entry['defect']} for {entry['ball_id']}; crop saved to defect_samples. Train Defect AI when enough volumes.")
+            self.ai_suggestion="NOT_TRAINED";self.ai_confidence=None
         except Exception as e:messagebox.showerror("Review not saved",str(e))
+    def select_ball(self,y,x):
+        if self.expected_centers:
+            d=[(cy-y)**2+(cx-x)**2 for cy,cx in self.expected_centers]
+            nearest=int(np.argmin(d))
+            if d[nearest]<=15**2:
+                self.ball_id.set(str(nearest+1))
+            else:
+                self.ball_id.set(f"XY_{y}_{x}")
+        else:
+            self.ball_id.set(f"XY_{y}_{x}")
+        self.selected_yx=(y,x)
+        self.ai_suggestion="NOT_PREDICTED";self.ai_confidence=None
+        self.status.set(f"Ball {self.ball_id.get()} selected at Y={y} X={x}; use AI Suggest, correct Defect, Confirm OK/NG")
+        self.refresh()
+    def train_defect(self):
+        if self.defect_model is not None:self.defect_model=None
+        def work():
+            from defect_feedback import train_feedback
+            output,state=train_feedback(self.dataset.get(),int(self.epochs.get()),
+                lambda msg:self.after(0,lambda t=msg:self.status.set(t)))
+            from defect_feedback import load_feedback
+            self.defect_model,self.defect_checkpoint=load_feedback(output)
+            self.after(0,lambda:self.status.set(f"Defect model saved; held-out volume {state['validation_volume']} accuracy={state['validation_accuracy']:.2%}; human review still required"))
+        self.worker(work)
+    def load_defect_model(self):
+        path=filedialog.askopenfilename(filetypes=[("Confirmed defect model","*.pt")])
+        if not path:return
+        def work():
+            from defect_feedback import load_feedback
+            self.defect_model,self.defect_checkpoint=load_feedback(path)
+            self.after(0,lambda:self.status.set("Defect classifier loaded; select a Ball then AI Suggest Defect"))
+        self.worker(work)
+    def predict_defect(self):
+        if self.selected_yx is None:
+            messagebox.showinfo("Select first","Enable Select Ball and click the ball first");return
+        if self.defect_model is None:
+            self.status.set("NOT TRAINED: Please confirm examples from multiple volumes then Train Defect AI")
+            return
+        center=self.selected_yx;stack=self.review_stack()
+        def work():
+            from defect_feedback import crop_stack,predict_feedback
+            result=predict_feedback(self.defect_model,self.defect_checkpoint,crop_stack(stack,center))
+            self.ai_suggestion=result["suggestion"];self.ai_confidence=result["confidence"]
+            self.after(0,lambda:self.status.set(
+                f"AI proposes {result['suggestion']} ({result['confidence']:.1%}), {result['status']}. Select true defect and Confirm."))
+        self.worker(work)
     def paint(self,event):
         try:
             x=int((event.x-self.ox)/self.scale);y=int((event.y-self.oy)/self.scale)
             m=self.mask()
             if 0<=x<m.shape[1] and 0<=y<m.shape[0]:
+                if self.review_mode.get():
+                    if getattr(event,"type",None) is not None and str(event.type)=="6":return
+                    self.select_ball(y,x)
+                    return
+                self.mask_verified.set(False)
                 if self.auto_mode.get():
                     from autolabel import auto_region
                     region=auto_region(self.get_image(),(x,y),int(self.edge_tolerance.get()))
@@ -138,14 +218,18 @@ class Studio(tk.Toplevel):
         except Exception as e:self.status.set(str(e))
     def save_label(self):
         try:
+            if not self.mask_verified.get():raise ValueError("Review the FULL mask and tick Verified full mask before saving for segmentation training")
+            if self.selected_yx is None:raise ValueError("Select Ball first to identify the labeled region")
             z=self.parent.z;vol=self.parent.vol
             stack=stack3(vol,z) if vol is not None else np.stack([self.get_image().astype(np.float32)/255]*3)
             name=self.volume_id.get()
             if not name or name in (".","..") or any(c in name for c in '\\/:*?"<>|'):raise ValueError("Invalid volume ID")
             path=Path(self.dataset.get())/name
             path.mkdir(parents=True,exist_ok=True)
+            if np.count_nonzero(self.mask())<5:raise ValueError("Mask is empty; use Auto Edge or brush before saving")
             np.savez_compressed(path/f"z{z:04d}.npz",image=stack.astype("float32"),mask=self.mask())
-            self.status.set("Saved labeled slice; label multiple VOLUME IDs for validation")
+            self.status.set("Verified full-slice mask saved; training dataset updated")
+            self.mask_verified.set(False)
         except Exception as e:messagebox.showerror("Save label",str(e))
     def worker(self,fn):
         def run():
