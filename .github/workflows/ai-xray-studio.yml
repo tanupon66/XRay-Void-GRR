@@ -6,6 +6,9 @@ on:
       - "ai-xray-desktop/**"
       - ".github/workflows/ai-xray-studio.yml"
   workflow_dispatch:
+concurrency:
+  group: ai-xray-dl-studio-${{ github.ref }}
+  cancel-in-progress: true
 permissions:
   contents: read
 jobs:
@@ -63,4 +66,4 @@ jobs:
           REPO: ${{ github.repository }}
           RUN: ${{ github.run_number }}
         run: |
-          gh release create "ai-xray-dl-v1.1-feedback-${RUN}" release/AI-Xray-DL-Studio.exe --repo "$REPO" --prerelease --title "AI X-ray DL Studio v1.1 Human Feedback ${RUN}" --notes "Experimental v0.5 Labeling + v0.6 2.5D U-Net training/prediction + v0.7 CT-stack voxel analysis. NOT validated, NO pre-trained weights, must provide masks."
+          gh release create "ai-xray-dl-v1.1-feedback-${RUN}" release/AI-Xray-DL-Studio.exe --repo "$REPO" --prerelease --title "AI X-ray DL Studio v1.1 Human Feedback ${RUN}" --notes "Experimental v1.1: click Ball, correct defect category, save confirmed crops, explicitly train and test separate defect CNN. Research-only, not validated for production OK/NG."
