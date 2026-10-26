@@ -32,3 +32,10 @@ def test_volume_raw_and_size_guard(tmp_path):
     import pytest
     with pytest.raises(ValueError,match="size mismatch"):
         read_volume(vgi,rec)
+
+
+def test_omron_volumeprimitive_is_not_multivolume(tmp_path):
+    from app import vgi_sections
+    p=tmp_path/"real_style.vgi"
+    p.write_text("{volume1}\n[representation]\nsize = 266 453 34\n[file1]\nsize = 266 453 34\n{volumeprimitive1}\n[geometry]\nresolution = 30 30 30\n{camera1}\n{scene}\n",encoding="utf-8")
+    assert vgi_sections(p)["geometry"]["resolution"]=="30 30 30"
