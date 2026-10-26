@@ -153,11 +153,13 @@ class Studio(tk.Toplevel):
                 result[z],_=predict(self.model,stack3(volume,z))
                 self.after(0,lambda i=z:self.status.set(f"3D slice {i+1}/{len(volume)}"))
             self.pred=result
-            rows=volume_metrics(result)
+            from measurement3d import measure_3d,volume_summary
+            rows=measure_3d(result,(30,30,30),peers=10)
+            summary=volume_summary(result,(30,30,30))
             out=Path(self.dataset.get())/"results";out.mkdir(parents=True,exist_ok=True)
             np.savez_compressed(out/"labels3d.npz",labels=result)
             with (out/"objects3d.csv").open("w",newline="") as f:
-                writer=csv.DictWriter(f,["id","volume_mm3","void_mm3","void_pct"]);writer.writeheader();writer.writerows(rows)
-            (out/"summary.json").write_text(json.dumps({"objects":len(rows),"assumed_voxel_um":30,"warning":"Unvalidated; adjacent balls may be merged"}))
+                writer=csv.DictWriter(f,list(rows[0]) if rows else ["id"]);writer.writeheader();writer.writerows(rows)
+            (out/"summary.json").write_text(json.dumps({"objects":len(rows),"assumed_voxel_um":30,"overall":summary,"warning":"Research only: touching balls can merge; false joins and mislabeled voids possible"}))
             self.after(0,lambda:self.status.set(f"Saved {len(rows)} candidate 3D objects to {out}"))
         self.worker(work)
